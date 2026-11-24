@@ -1,0 +1,52 @@
+mouse_trigger {
+  input: MOUSE_BUTTON_1
+  action: "touch"
+}
+touch_trigger {
+  input: TOUCH_MULTI
+  action: "touch"
+}
+key_trigger {
+  input: KEY_W
+  action: "lane_up"
+}
+key_trigger {
+  input: KEY_UP
+  action: "lane_up"
+}
+key_trigger {
+  input: KEY_S
+  action: "lane_down"
+}
+key_trigger {
+  input: KEY_DOWN
+  action: "lane_down"
+}
+key_trigger {
+  input: KEY_A
+  action: "throttle_down"
+}
+key_trigger {
+  input: KEY_D
+  action: "throttle_up"
+}
+key_trigger {
+  input: KEY_SPACE
+  action: "swap_key"
+}
+key_trigger {
+  input: KEY_P
+  action: "pause_key"
+}
+key_trigger {
+  input: KEY_ESC
+  action: "pause_key"
+}
+key_trigger {
+  input: KEY_U
+  action: "unlock_key"
+}
+key_trigger {
+  input: KEY_M
+  action: "mute_key"
+}

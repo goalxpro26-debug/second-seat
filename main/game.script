@@ -1,0 +1,195 @@
+-- Second Seat: controller. Owns save data, level flow, GD ads, music.
+-- The view (gui#gui) owns the road, the scooter, input and animations.
+-- All gdsdk calls go through main/gd_ads.lua (pcall-guarded) so the game
+-- runs fine with no SDK / no network.
+local audio = require("main.audio")
+local levels = require("main.levels")
+local gd_ads = require("main.gd_ads")
+
+local GUI = "gui#gui"
+local SAVE_FILE = "second_seat"
+local SOUNDS = {
+  "sfx_click", "sfx_swap", "sfx_pickup", "sfx_crash", "sfx_stall",
+  "sfx_win", "sfx_lose", "sfx_mission", "sfx_engine", "sfx_delivery",
+  "bgm_menu", "bgm_game",
+}
+
+local function fresh_save()
+  return { unlocked = 1, stars = {}, endless_best = 0, muted = false,
+           played_once = false }
+end
+
+local function load_save()
+  local data = sys.load(SAVE_FILE)
+  if type(data) == "table" and type(data.unlocked) == "number" then
+    data.stars = data.stars or {}
+    data.endless_best = data.endless_best or 0
+    data.unlocked = math.max(1, math.min(#levels.LEVELS, data.unlocked))
+    return data
+  end
+  return fresh_save()
+end
+
+local function persist(self)
+  sys.save(SAVE_FILE, self.save)
+end
+
+local function stop_music()
+  audio.stop("bgm_menu")
+  audio.stop("bgm_game")
+  audio.stop("sfx_engine")
+end
+
+local function show_title(self)
+  self.screen = "title"
+  self.user_paused = false
+  stop_music()
+  audio.play("bgm_menu")
+  msg.post(GUI, "show_title", {
+    unlocked = self.save.unlocked,
+    stars = self.save.stars,
+    endless_best = self.save.endless_best,
+    muted = self.save.muted,
+  })
+end
+
+local function show_levels(self)
+  self.screen = "levels"
+  msg.post(GUI, "show_levels", {
+    unlocked = self.save.unlocked,
+    stars = self.save.stars,
+    muted = self.save.muted,
+  })
+end
+
+local function start_level(self, n, endless)
+  n = math.max(1, math.min(#levels.LEVELS, n or 1))
+  self.level = n
+  self.endless = endless or false
+  self.screen = "play"
+  self.user_paused = false -- a fresh game clears any stale pause state
+  local def = endless and levels.ENDLESS or levels.get(n)
+  stop_music()
+  audio.play("bgm_game")
+  audio.play("sfx_engine")
+  msg.post(GUI, "show_play", {
+    level = n,
+    endless = endless or false,
+    def = def,
+    muted = self.save.muted,
+  })
+end
+
+function init(self)
+  self.save = load_save()
+  self.muted = self.save.muted or false
+  self.screen = "title"
+  self.ad_paused = false
+  self.user_paused = false
+  audio.register(SOUNDS)
+  audio.set_muted(self.muted)
+  gd_ads.init(
+    function() -- SDK_GAME_PAUSE: mute + pause + block input
+      if not self.ad_paused then
+        self.ad_paused = true
+        audio.set_muted(true)
+        msg.post(GUI, "ad_pause", {})
+      end
+    end,
+    function() -- SDK_GAME_START / resume / ad error: resume
+      if self.ad_paused then
+        self.ad_paused = false
+        audio.set_muted(self.muted)
+        msg.post(GUI, "ad_resume", {})
+      end
+    end)
+  show_title(self)
+end
+
+function on_message(self, message_id, message, sender)
+  if message_id == hash("ui_play") then
+    -- First Play tap shows the pre-roll ad (immediate user-input reaction).
+    if not self.save.played_once then
+      self.save.played_once = true
+      persist(self)
+      gd_ads.show_preroll()
+    end
+    start_level(self, math.min(self.save.unlocked, #levels.LEVELS), false)
+  elseif message_id == hash("ui_levels") then
+    show_levels(self)
+  elseif message_id == hash("ui_endless") then
+    start_level(self, 1, true)
+  elseif message_id == hash("ui_pick_level") then
+    local n = math.max(1, math.min(#levels.LEVELS, message.level or 1))
+    if n <= self.save.unlocked then
+      start_level(self, n, false)
+    end
+  elseif message_id == hash("ui_howto") then
+    msg.post(GUI, "show_howto", {})
+  elseif message_id == hash("ui_unlock_all") then
+    -- Hidden QA aid: unlock every level so later levels can be
+    -- spot-checked without beating the earlier ones.
+    self.save.unlocked = #levels.LEVELS
+    persist(self)
+    show_title(self)
+  elseif message_id == hash("ui_level_won") then
+    local n = self.level
+    local stars = math.max(1, math.min(3, message.stars or 1))
+    if not self.endless then
+      if not self.save.stars[n] or stars > self.save.stars[n] then
+        self.save.stars[n] = stars
+      end
+      self.save.unlocked = math.max(self.save.unlocked,
+        math.min(n + 1, #levels.LEVELS))
+      persist(self)
+    end
+    self.screen = "win"
+    stop_music()
+    audio.play("sfx_win")
+    msg.post(GUI, "show_win", {
+      level = n, endless = self.endless, score = message.score or 0,
+      stars = stars, has_next = (not self.endless) and n < #levels.LEVELS,
+      deliveries = message.deliveries or 0,
+    })
+  elseif message_id == hash("ui_level_lost") then
+    if self.endless and message.score then
+      if message.score > (self.save.endless_best or 0) then
+        self.save.endless_best = message.score
+        persist(self)
+      end
+    end
+    self.screen = "lose"
+    stop_music()
+    audio.play("sfx_lose")
+    msg.post(GUI, "show_lose", {
+      level = self.level, endless = self.endless,
+      score = message.score or 0,
+      best = self.save.endless_best or 0,
+      reason = message.reason,
+      deliveries = message.deliveries or 0,
+    })
+  elseif message_id == hash("ui_next") then
+    -- Interstitial on level complete: shown when the player taps Next.
+    gd_ads.show_interstitial()
+    start_level(self, self.level + 1, false)
+  elseif message_id == hash("ui_retry") then
+    start_level(self, self.level, self.endless)
+  elseif message_id == hash("ui_quit") then
+    self.user_paused = false
+    show_title(self)
+  elseif message_id == hash("ui_pause") then
+    self.user_paused = true
+    audio.set_muted(true)
+    msg.post(GUI, "show_pause", {})
+  elseif message_id == hash("ui_resume") then
+    self.user_paused = false
+    audio.set_muted(self.muted or self.ad_paused)
+    msg.post(GUI, "hide_pause", {})
+  elseif message_id == hash("ui_mute") then
+    self.muted = not self.muted
+    self.save.muted = self.muted
+    persist(self)
+    audio.set_muted(self.muted or self.ad_paused or self.user_paused)
+    msg.post(GUI, "set_mute", { muted = self.muted })
+  end
+end

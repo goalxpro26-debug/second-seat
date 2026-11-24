@@ -1,0 +1,19 @@
+script: "/main/gui.gui_script"
+background_color {
+  x: 0.55
+  y: 0.8
+  z: 0.6
+  w: 1.0
+}
+fonts {
+  name: "default"
+  font: "/builtins/fonts/default.font"
+}
+materials {
+  name: "gui"
+  material: "/builtins/materials/gui.material"
+}
+textures {
+  name: "atlas"
+  texture: "/art/atlas.atlas"
+}

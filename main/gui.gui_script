@@ -1,0 +1,1005 @@
+-- Second Seat: view layer. Owns every screen, the road, the scooter,
+-- entities, input (mouse + touch + keyboard), animations, and mission
+-- tracking. The controller (game#game) owns save data, level flow, ads
+-- and music. The driving model lives in main/scooter.lua (pure logic).
+local audio = require("main.audio")
+local levels = require("main.levels")
+local scooter = require("main.scooter")
+
+local W, H = 1136, 640
+local GAME = "game#game"
+
+-- FORWARD DECLARATIONS: every local function referenced in an earlier
+-- closure must be declared here first, or real clicks do nothing.
+local do_swap
+local do_lane_change
+local do_throttle
+local do_autoplay
+local end_level
+local stars_for
+local update_hud
+local sync_entities
+local update_scooter_visual
+
+local LANE_Y = scooter.LANE_Y
+
+local C = {
+  white   = vmath.vector4(1, 1, 1, 1),
+  ink     = vmath.vector4(0.20, 0.14, 0.10, 1),
+  panel   = vmath.vector4(0.99, 0.94, 0.84, 1),
+  btn     = vmath.vector4(0.85, 0.32, 0.22, 1),
+  btn2    = vmath.vector4(0.95, 0.65, 0.20, 1),
+  btn_dim = vmath.vector4(0.55, 0.55, 0.55, 1),
+  dim     = vmath.vector4(0, 0, 0, 0.55),
+  danger  = vmath.vector4(0.9, 0.25, 0.25, 1),
+  gold    = vmath.vector4(1, 0.8, 0.25, 1),
+  green   = vmath.vector4(0.30, 0.75, 0.35, 1),
+  orange  = vmath.vector4(0.95, 0.55, 0.15, 1),
+  teal    = vmath.vector4(0.13, 0.63, 0.59, 1),
+  clear   = vmath.vector4(1, 1, 1, 0),
+}
+
+-- ------------------------------------------------------------ node helpers --
+
+local function track(self, node, overlay)
+  if overlay then self.onodes[#self.onodes + 1] = node
+  else self.nodes[#self.nodes + 1] = node end
+  return node
+end
+
+local function new_box(self, overlay, parent, x, y, w, h, color)
+  local n = gui.new_box_node(vmath.vector3(x, y, 0), vmath.vector3(w, h, 0))
+  gui.set_pivot(n, gui.PIVOT_CENTER)
+  gui.set_color(n, color or C.white)
+  if parent then gui.set_parent(n, parent) else track(self, n, overlay) end
+  return n
+end
+
+local function new_img(self, overlay, parent, image, x, y, w, h)
+  local n = new_box(self, overlay, parent, x, y, w, h, C.white)
+  gui.set_texture(n, "atlas")
+  gui.play_flipbook(n, hash(image))
+  return n
+end
+
+local function new_text(self, overlay, parent, str, x, y, scale, color, wrap_w)
+  local n = gui.new_text_node(vmath.vector3(x, y, 0), str or "")
+  gui.set_font(n, "default")
+  gui.set_pivot(n, gui.PIVOT_CENTER)
+  gui.set_scale(n, vmath.vector3(scale or 1, scale or 1, 1))
+  gui.set_color(n, color or C.white)
+  if wrap_w then
+    gui.set_line_break(n, true)
+    gui.set_size(n, vmath.vector3(wrap_w, 4000, 0))
+  end
+  if parent then gui.set_parent(n, parent) else track(self, n, overlay) end
+  return n
+end
+
+local function pick(self, node, cb, overlay)
+  self.pick[#self.pick + 1] = { node = node, cb = cb, overlay = overlay }
+end
+
+local function button(self, overlay, parent, label, x, y, w, h, scale, cb, color)
+  local b = new_box(self, overlay, parent, x, y, w, h, color or C.btn)
+  local t = new_text(self, overlay, b, label, 0, 0, scale or 1.1, C.white)
+  pick(self, b, function()
+    audio.play("sfx_click")
+    gui.animate(b, gui.PROP_SCALE, vmath.vector3(0.92, 0.92, 1),
+      gui.EASING_OUT, 0.06, 0, function()
+        gui.animate(b, gui.PROP_SCALE, vmath.vector3(1, 1, 1),
+          gui.EASING_OUTBACK, 0.12)
+      end)
+    cb()
+  end, overlay)
+  return b, t
+end
+
+local function obox(self, parent, x, y, w, h, color)
+  return new_box(self, true, parent, x, y, w, h, color)
+end
+
+local function otext(self, parent, str, x, y, scale, color, wrap_w)
+  return new_text(self, true, parent, str, x, y, scale, color, wrap_w)
+end
+
+local function oimg(self, parent, image, x, y, w, h)
+  return new_img(self, true, parent, image, x, y, w, h)
+end
+
+local function clear_all(self)
+  for _, n in ipairs(self.nodes) do pcall(gui.delete_node, n) end
+  for _, n in ipairs(self.onodes) do pcall(gui.delete_node, n) end
+  self.nodes, self.onodes, self.pick = {}, {}, {}
+  self.overlay_up = false
+  self.particles = {}
+  self.popups = {}
+  self.ent_nodes = {}
+  self.scooter_node = nil
+  self.gen = (self.gen or 0) + 1
+end
+
+local function clear_overlay(self)
+  for _, n in ipairs(self.onodes) do pcall(gui.delete_node, n) end
+  self.onodes = {}
+  local keep = {}
+  for _, p in ipairs(self.pick) do
+    if not p.overlay then keep[#keep + 1] = p end
+  end
+  self.pick = keep
+  self.gen = (self.gen or 0) + 1
+  self.overlay_up = false
+end
+
+local function bg(self)
+  new_img(self, false, nil, "background", W / 2, H / 2, W, H)
+end
+
+local function panel(self, w, h)
+  obox(self, nil, 0, 0, W, H, C.dim)
+  local p = obox(self, nil, W / 2, H / 2, w, h, C.panel)
+  gui.set_scale(p, vmath.vector3(0.9, 0.9, 1))
+  gui.animate(p, gui.PROP_SCALE, vmath.vector3(1, 1, 1),
+    gui.EASING_OUTBACK, 0.25)
+  self.overlay_up = true
+  return p
+end
+
+-- ------------------------------------------------------------------ HUD --
+
+local function fmt_time(s)
+  s = math.max(0, math.ceil(s or 0))
+  return string.format("%d:%02d", math.floor(s / 60), s % 60)
+end
+
+local function mission_progress(self)
+  local m = self.model
+  if not m then return "" end
+  local def = m.def
+  if m.endless then
+    return "Deliveries: " .. m.deliveries .. "   Crashes: " .. m.crashes .. " / 3"
+  end
+  local mt = def.mission.type
+  if mt == "deliver" or mt == "nostall" then
+    local s = "Deliveries: " .. m.deliveries .. " / " .. def.mission.target
+    if mt == "nostall" then s = s .. "  NO STALLS" end
+    return s
+  elseif mt == "score" then
+    return "Score: " .. m.score .. " / " .. def.mission.target
+  end
+  return ""
+end
+
+update_hud = function(self)
+  local m = self.model
+  if not m then return end
+  if self.hud_score then
+    gui.set_text(self.hud_score, "Score  " .. m.score)
+  end
+  if self.hud_timer then
+    if m.endless then
+      gui.set_text(self.hud_timer, fmt_time(m.elapsed))
+    else
+      gui.set_text(self.hud_timer, fmt_time(m.time_left))
+      if m.time_left and m.time_left < 30 then
+        gui.set_color(self.hud_timer, C.danger)
+      else
+        gui.set_color(self.hud_timer, C.white)
+      end
+    end
+  end
+  if self.hud_mission then
+    gui.set_text(self.hud_mission, mission_progress(self))
+  end
+  if self.hud_speed then
+    gui.set_text(self.hud_speed, math.floor(m.speed + 0.5) .. " km/h")
+  end
+  if self.hud_seat then
+    if m.seat == "front" then
+      gui.set_text(self.hud_seat, "YOU: FRONT - steering (W/S)")
+      gui.set_color(self.hud_seat, C.teal)
+    else
+      gui.set_text(self.hud_seat, "YOU: BACK - throttle (A/D)")
+      gui.set_color(self.hud_seat, C.orange)
+    end
+  end
+  if self.hud_fatigue_fill and self.hud_fatigue_bg then
+    local f = m.fatigue / 100
+    local w = 200 * f
+    gui.set_size(self.hud_fatigue_fill, vmath.vector3(math.max(2, w), 18, 0))
+    local bx = gui.get_position(self.hud_fatigue_bg).x
+    gui.set_position(self.hud_fatigue_fill,
+      vmath.vector3(bx - 100 + math.max(2, w) / 2,
+        gui.get_position(self.hud_fatigue_bg).y, 0))
+    if f > 0.75 then gui.set_color(self.hud_fatigue_fill, C.danger)
+    elseif f > 0.45 then gui.set_color(self.hud_fatigue_fill, C.orange)
+    else gui.set_color(self.hud_fatigue_fill, C.green) end
+  end
+  if self.hud_fatigue_txt then
+    gui.set_text(self.hud_fatigue_txt,
+      math.floor(m.fatigue + 0.5) .. "%" ..
+      (m.stalled and " STALLED!" or ""))
+  end
+  if self.hud_dist then
+    if m.endless then
+      gui.set_text(self.hud_dist, math.floor(m.distance) .. " m")
+    else
+      gui.set_text(self.hud_dist, math.floor(m.distance) .. " / " ..
+        math.floor(m.def.distance) .. " m")
+    end
+  end
+  if self.hud_progress_fill then
+    local frac = 0
+    if not m.endless and m.def.distance > 0 then
+      frac = math.min(1, m.distance / m.def.distance)
+    end
+    gui.set_size(self.hud_progress_fill, vmath.vector3(math.max(2, 400 * frac), 10, 0))
+    local bx = gui.get_position(self.hud_progress_bg).x
+    gui.set_position(self.hud_progress_fill,
+      vmath.vector3(bx - 200 + math.max(2, 400 * frac) / 2,
+        gui.get_position(self.hud_progress_bg).y, 0))
+  end
+end
+
+local function popup(self, x, y, str, color)
+  local n = new_text(self, false, nil, str, x, y, 1.1, color or C.gold)
+  gui.set_scale(n, vmath.vector3(0.6, 0.6, 1))
+  gui.animate(n, gui.PROP_SCALE, vmath.vector3(1.15, 1.15, 1),
+    gui.EASING_OUTBACK, 0.18)
+  self.popups[#self.popups + 1] = { node = n, life = 0.9 }
+end
+
+local function burst(self, x, y, color, n)
+  for i = 1, n or 6 do
+    local a = math.random() * math.pi * 2
+    local sp = 120 + math.random() * 260
+    local node = new_img(self, false, nil, "particle", x, y, 18, 18)
+    gui.set_color(node, color or C.white)
+    self.particles[#self.particles + 1] = {
+      node = node, vx = math.cos(a) * sp, vy = math.sin(a) * sp, life = 0.55,
+    }
+  end
+end
+
+local function smoke_puff(self, x, y)
+  local node = new_img(self, false, nil, "particle", x, y, 26, 26)
+  gui.set_color(node, vmath.vector4(0.5, 0.5, 0.5, 0.9))
+  self.particles[#self.particles + 1] = {
+    node = node, vx = -60, vy = 70, life = 0.8, smoke = true,
+  }
+end
+
+local function confetti(self)
+  local cols = { C.gold, C.btn, C.green, C.btn2, C.white }
+  for i = 1, 46 do
+    local node = new_img(self, false, nil, "particle",
+      math.random(40, W - 40), H + 20, 20, 20)
+    gui.set_color(node, cols[math.random(#cols)])
+    self.particles[#self.particles + 1] = {
+      node = node, vx = (math.random() - 0.5) * 120,
+      vy = -(140 + math.random() * 160), life = 1.6, confetti = true,
+    }
+  end
+end
+
+-- ---------------------------------------------------------------- screens --
+
+local function show_title(self, data)
+  self.screen = "title"
+  self.phase = "title"
+  self.paused = false
+  self.user_paused = false
+  clear_all(self)
+  bg(self)
+  new_img(self, false, nil, "scooter_front", 210, 390, 320, 190)
+  new_img(self, false, nil, "car_red", 900, 300, 210, 120)
+  new_img(self, false, nil, "parcel", 920, 500, 80, 80)
+  new_text(self, false, nil, "Second", 568, 515, 3.0, C.ink)
+  new_text(self, false, nil, "SEAT", 568, 450, 2.2, C.btn)
+  new_text(self, false, nil, "One scooter, two riders. Swap seats!",
+    568, 410, 0.95, C.ink)
+  local play = button(self, false, nil, "PLAY", 568, 312, 320, 80, 1.6,
+    function() msg.post(GAME, "ui_play", {}) end, C.btn)
+  gui.animate(play, gui.PROP_SCALE, vmath.vector3(1.06, 1.06, 1),
+    gui.EASING_INOUTSINE, 0.7, 0, nil, gui.PLAYBACK_LOOP_PINGPONG)
+  button(self, false, nil, "LEVELS", 400, 210, 260, 64, 1.2,
+    function() msg.post(GAME, "ui_levels", {}) end, C.btn2)
+  button(self, false, nil, "ENDLESS", 736, 210, 260, 64, 1.2,
+    function() msg.post(GAME, "ui_endless", {}) end, C.btn2)
+  button(self, false, nil, "HOW TO PLAY", 568, 130, 320, 64, 1.2,
+    function() msg.post(GAME, "ui_howto", {}) end)
+  if data.endless_best and data.endless_best > 0 then
+    new_text(self, false, nil, "Endless best: " .. data.endless_best,
+      568, 76, 1.0, C.ink)
+  end
+  new_text(self, false, nil, "An original game by ORQA",
+    568, 36, 0.8, C.ink)
+  self.mute_btn, self.mute_label = button(self, false, nil,
+    (self.muted and "SOUND OFF" or "SOUND ON"), 1030, 600, 150, 48, 0.85,
+    function() msg.post(GAME, "ui_mute", {}) end)
+end
+
+local function show_levels(self, data)
+  self.screen = "levels"
+  self.phase = "levels"
+  clear_all(self)
+  bg(self)
+  new_text(self, false, nil, "Pick a District", 568, 590, 2.0, C.ink)
+  local unlocked = data.unlocked or 1
+  for i = 1, #levels.LEVELS do
+    local col = (i - 1) % 4
+    local row = math.floor((i - 1) / 4)
+    local x = 218 + col * 240
+    local y = 460 - row * 150
+    local locked = i > unlocked
+    local b = new_box(self, false, nil, x, y, 190, 120,
+      locked and C.btn_dim or C.btn)
+    new_text(self, false, b, tostring(i), 0, 34, 1.6, C.white)
+    new_text(self, false, b, levels.NAMES[i], 0, -2, 0.75, C.white)
+    if locked then
+      new_img(self, false, b, "lock", 0, -40, 30, 40)
+    else
+      local stars = (data.stars and data.stars[i]) or 0
+      for s = 1, 3 do
+        local st = new_img(self, false, b, "star",
+          (s - 2) * 34, -40, 28, 28)
+        if s > stars then
+          gui.set_color(st, vmath.vector4(0.6, 0.6, 0.6, 0.7))
+        end
+      end
+      pick(self, b, function()
+        audio.play("sfx_click")
+        msg.post(GAME, "ui_pick_level", { level = i })
+      end)
+    end
+  end
+  button(self, false, nil, "BACK", 568, 70, 220, 64, 1.2,
+    function() msg.post(GAME, "ui_quit", {}) end)
+end
+
+-- ------------------------------------------------------------ play screen --
+
+local ENT_SIZE = {
+  car = { 210, 120 }, truck = { 300, 150 }, pothole = { 130, 46 },
+  pickup = { 100, 100 }, stop = { 120, 170 },
+}
+
+sync_entities = function(self)
+  local m = self.model
+  if not m then return end
+  local seen = {}
+  for _, e in ipairs(m.entities) do
+    seen[e.id] = true
+    local rec = self.ent_nodes[e.id]
+    local sz = ENT_SIZE[e.kind] or { 100, 100 }
+    if not rec then
+      local node = new_img(self, false, nil, e.img, e.x, LANE_Y[e.lane],
+        sz[1], sz[2])
+      self.ent_nodes[e.id] = { node = node, kind = e.kind }
+    else
+      gui.set_position(rec.node, vmath.vector3(e.x, LANE_Y[e.lane], 0))
+    end
+  end
+  for id, rec in pairs(self.ent_nodes) do
+    if not seen[id] then
+      pcall(gui.delete_node, rec.node)
+      self.ent_nodes[id] = nil
+    end
+  end
+end
+
+update_scooter_visual = function(self, dt)
+  local m = self.model
+  local node = self.scooter_node
+  if not m or not node then return end
+  -- Smooth lane glide toward the model's lane.
+  local target_y = LANE_Y[m.lane]
+  local pos = gui.get_position(node)
+  local dy = target_y - pos.y
+  local step = 620 * dt
+  if math.abs(dy) <= step then pos.y = target_y
+  else pos.y = pos.y + (dy > 0 and step or -step) end
+  -- Bounce while moving; shake on crash.
+  local bounce = 0
+  if m.speed > 1 then
+    bounce = math.sin(self.now * (6 + m.speed * 0.25)) * 2.5 * (m.speed / 60)
+  end
+  pos.y = pos.y + bounce
+  local x = scooter.SCOOTER_X
+  if self.shake_t and self.shake_t > 0 then
+    x = x + (math.random() - 0.5) * 16
+    self.shake_t = self.shake_t - dt
+  end
+  gui.set_position(node, vmath.vector3(x, pos.y, 0))
+  -- Seat image: teal helmet drives when you are in front.
+  local want = m.seat == "front" and "scooter_front" or "scooter_back"
+  if self.scooter_img ~= want then
+    self.scooter_img = want
+    gui.play_flipbook(node, hash(want))
+  end
+end
+
+local function show_play(self, data)
+  self.screen = "play"
+  self.level = data.level or 1
+  self.endless = data.endless or false
+  self.def = data.def
+  self.model = scooter.new(data.def, data.endless)
+  self.over = false
+  self.end_pending = nil
+  self.end_timer = 0
+  self.ai_timer = 0.5
+  self.paused = false
+  self.user_paused = false -- a fresh game clears any stale pause state
+  self.shake_t = 0
+  self.smoke_t = 0
+  self.scooter_y = LANE_Y[2]
+  self.scooter_img = "scooter_front"
+  self.banner_active = false
+  self.banner_timer = nil
+  self.banner_node = nil
+  self.a_held = false
+  self.d_held = false
+  clear_all(self)
+  bg(self)
+  -- Dark HUD strip across the top (y 540..640): the sky, rooftops and
+  -- awnings behind it are too light/busy for white or ink text (run 3
+  -- screenshots: Score, timer, mission and the seat line were all
+  -- unreadable or cut off). All HUD text lives on this strip now.
+  new_box(self, false, nil, 568, 590, W, 100, vmath.vector4(0, 0, 0, 0.55))
+  -- HUD rows: 622 / 592 / 562 (progress line at 544).
+  self.hud_score = new_text(self, false, nil, "Score  0", 110, 622, 1.0, C.white)
+  self.hud_timer = new_text(self, false, nil, fmt_time(self.model.time_left),
+    568, 622, 1.3, C.white)
+  self.hud_mission = new_text(self, false, nil, "", 568, 592, 0.85, C.white)
+  self.hud_speed = new_text(self, false, nil, "0 km/h", 880, 622, 0.9, C.white)
+  self.hud_dist = new_text(self, false, nil, "", 950, 592, 0.9, C.white)
+  self.hud_progress_bg = new_box(self, false, nil, 568, 544, 400, 8,
+    vmath.vector4(0, 0, 0, 0.4))
+  self.hud_progress_fill = new_box(self, false, nil, 368, 544, 2, 8, C.gold)
+  self.hud_seat = new_text(self, false, nil, "", 200, 592, 0.8, C.teal)
+  new_text(self, false, nil, "TIRED:", 150, 562, 0.8, C.white)
+  self.hud_fatigue_bg = new_box(self, false, nil, 300, 562, 200, 18,
+    vmath.vector4(0, 0, 0, 0.4))
+  self.hud_fatigue_fill = new_box(self, false, nil, 202, 562, 2, 18, C.green)
+  self.hud_fatigue_txt = new_text(self, false, nil, "", 450, 562, 0.8, C.white)
+  button(self, false, nil, "MENU", 1080, 612, 90, 40, 0.8,
+    function() msg.post(GAME, "ui_quit", {}) end, C.btn2)
+  button(self, false, nil, "II", 980, 612, 56, 40, 0.9,
+    function() msg.post(GAME, "ui_pause", {}) end, C.btn2)
+  -- Scooter node
+  self.scooter_node = new_img(self, false, nil, "scooter_front",
+    scooter.SCOOTER_X, LANE_Y[2], 320, 190)
+  -- Touch buttons (bottom bar): SWAP / THR- / THR+ / LANE DN / LANE UP
+  button(self, false, nil, "SWAP", 150, 70, 170, 70, 1.2,
+    function() do_swap(self) end, C.teal)
+  button(self, false, nil, "THR -", 340, 70, 120, 70, 1.1,
+    function() do_throttle(self, -10) end, C.btn2)
+  button(self, false, nil, "THR +", 480, 70, 120, 70, 1.1,
+    function() do_throttle(self, 10) end, C.btn2)
+  button(self, false, nil, "LANE DN", 650, 70, 150, 70, 1.1,
+    function() do_lane_change(self, 1) end, C.btn2)
+  button(self, false, nil, "LANE UP", 830, 70, 150, 70, 1.1,
+    function() do_lane_change(self, -1) end, C.btn2)
+  update_hud(self)
+  -- Mission banner: right side, below the HUD strip, clear of the
+  -- scooter (max x 460) and the HUD buttons. Deleted DIRECTLY on timer
+  -- expiry (even while paused): the old clear_overlay path was gated
+  -- on not-paused, so a pre-roll ad left the banner covering the road
+  -- for the whole level.
+  local bb = obox(self, nil, 900, 500, 380, 44, C.panel)
+  gui.set_scale(bb, vmath.vector3(0.9, 0.9, 1))
+  gui.animate(bb, gui.PROP_SCALE, vmath.vector3(1, 1, 1),
+    gui.EASING_OUTBACK, 0.25)
+  otext(self, bb, "MISSION: " .. self.def.mission.text, 0, 0, 0.95, C.ink, 360)
+  self.banner_node = bb
+  self.banner_timer = 2.5
+  self.banner_active = true
+  audio.play("sfx_mission")
+end
+
+-- --------------------------------------------------------------- overlays --
+
+local function show_pause(self)
+  self.paused = true
+  clear_overlay(self)
+  local p = panel(self, 460, 460)
+  otext(self, p, "PAUSED", 0, 170, 2.0, C.ink)
+  button(self, true, p, "RESUME", 0, 80, 320, 72, 1.2,
+    function() msg.post(GAME, "ui_resume", {}) end)
+  button(self, true, p, "RESTART", 0, -10, 320, 72, 1.2,
+    function() msg.post(GAME, "ui_retry", {}) end, C.btn2)
+  button(self, true, p, "SOUND: " .. (self.muted and "OFF" or "ON"),
+    0, -100, 320, 72, 1.2,
+    function() msg.post(GAME, "ui_mute", {}) end, C.btn2)
+  button(self, true, p, "QUIT TO TITLE", 0, -180, 320, 64, 1.1,
+    function() msg.post(GAME, "ui_quit", {}) end)
+end
+
+local function show_win(self, data)
+  self.screen = "win"
+  self.phase = "win"
+  clear_overlay(self)
+  confetti(self)
+  audio.play("sfx_mission")
+  local p = panel(self, 520, 600)
+  otext(self, p, "ROUTE COMPLETE!", 0, 220, 1.7, C.btn)
+  otext(self, p, (self.def and self.def.name or "") .. " - deliveries made!",
+    0, 172, 1.1, C.ink)
+  for s = 1, 3 do
+    local st = oimg(self, p, "star", (s - 2) * 90, 92, 72, 72)
+    gui.set_scale(st, vmath.vector3(0.2, 0.2, 1))
+    if s <= (data.stars or 1) then
+      gui.animate(st, gui.PROP_SCALE, vmath.vector3(1, 1, 1),
+        gui.EASING_OUTBACK, 0.35, 0.15 + s * 0.18)
+    else
+      gui.set_color(st, vmath.vector4(0.6, 0.6, 0.6, 0.7))
+      gui.animate(st, gui.PROP_SCALE, vmath.vector3(1, 1, 1),
+        gui.EASING_OUTBACK, 0.35, 0.15 + s * 0.18)
+    end
+  end
+  otext(self, p, "Score  " .. (data.score or 0), 0, 8, 1.3, C.ink)
+  otext(self, p, "Deliveries " .. (data.deliveries or 0), 0, -38, 1.0, C.ink)
+  local y = -82
+  if data.has_next then
+    button(self, true, p, "NEXT LEVEL", 0, y, 340, 76, 1.3,
+      function() msg.post(GAME, "ui_next", {}) end)
+    y = y - 85
+  end
+  button(self, true, p, "REPLAY", 0, y, 340, 72, 1.2,
+    function() msg.post(GAME, "ui_retry", {}) end, C.btn2)
+  button(self, true, p, "LEVELS", 0, y - 85, 340, 72, 1.2,
+    function() msg.post(GAME, "ui_levels", {}) end, C.btn2)
+end
+
+local function show_lose(self, data)
+  self.screen = "lose"
+  self.phase = "lose"
+  clear_overlay(self)
+  local p = panel(self, 520, 460)
+  if data.endless then
+    otext(self, p, "COURIER RUN OVER", 0, 170, 1.7, C.danger)
+    otext(self, p, data.reason or "Three crashes!", 0, 115, 1.1, C.ink, 460)
+    otext(self, p, "Score  " .. (data.score or 0), 0, 55, 1.3, C.ink)
+    otext(self, p, "Best  " .. (data.best or 0), 0, 5, 1.1, C.ink)
+  else
+    otext(self, p, "ROUTE FAILED", 0, 170, 1.9, C.danger)
+    otext(self, p, data.reason or "Out of time - try again!", 0, 115, 1.1, C.ink, 460)
+    otext(self, p, "Score  " .. (data.score or 0), 0, 55, 1.3, C.ink)
+  end
+  button(self, true, p, "TRY AGAIN", 0, -70, 340, 76, 1.3,
+    function() msg.post(GAME, "ui_retry", {}) end)
+  button(self, true, p, "LEVELS", 0, -160, 340, 72, 1.2,
+    function() msg.post(GAME, "ui_levels", {}) end, C.btn2)
+end
+
+local function show_howto(self)
+  clear_overlay(self)
+  local p = panel(self, 700, 520)
+  otext(self, p, "HOW TO PLAY", 0, 210, 1.8, C.ink)
+  otext(self, p,
+    "One scooter, two riders, one town. You share the driving: " ..
+    "the FRONT seat steers, the BACK seat works the throttle.\n\n" ..
+    "SWAP seats (Space or the SWAP button) to trade jobs. Your " ..
+    "partner keeps your last throttle order while they drive - " ..
+    "and tires out. A tired partner stalls the scooter: swap " ..
+    "them up front to rest.\n\n" ..
+    "Dodge cars, trucks and potholes. Grab parcels (+100). Stop " ..
+    "at delivery signs SLOWLY (under 20 km/h) to deliver (+300). " ..
+    "Three crashes end the route.\n\n" ..
+    "Keys: W/S or Up/Down change lane, A/D throttle, Space swap, " ..
+    "P pause, M mute.",
+    0, -30, 1.05, C.ink, 620)
+  button(self, true, p, "GOT IT", 0, -210, 300, 64, 1.2,
+    function() clear_overlay(self) end)
+end
+
+-- ------------------------------------------------------------ game actions --
+
+stars_for = function(self)
+  local th = self.def.stars or { 0, 0, 0 }
+  if (th[3] or 0) > 0 and self.model.score >= th[3] then return 3 end
+  if (th[2] or 0) > 0 and self.model.score >= th[2] then return 2 end
+  return 1
+end
+
+end_level = function(self, won, reason)
+  if self.over then return end
+  self.over = true
+  self.end_pending = won and "win" or "lose"
+  self.end_reason = reason
+  self.end_timer = 1.1
+  if won then
+    confetti(self)
+    audio.play("sfx_mission")
+  end
+end
+
+do_swap = function(self)
+  if self.screen ~= "play" or self.paused or self.over then return end
+  local m = self.model
+  if not m then return end
+  scooter.swap(m)
+  audio.play("sfx_swap")
+  popup(self, scooter.SCOOTER_X + 300, 470,
+    m.seat == "front" and "You steer now!" or "You throttle now!", C.teal)
+  if self.scooter_node then
+    gui.set_scale(self.scooter_node, vmath.vector3(0.85, 0.85, 1))
+    gui.animate(self.scooter_node, gui.PROP_SCALE,
+      vmath.vector3(1, 1, 1), gui.EASING_OUTBACK, 0.25)
+  end
+  update_hud(self)
+end
+
+do_lane_change = function(self, d)
+  if self.screen ~= "play" or self.paused or self.over then return end
+  local m = self.model
+  if not m then return end
+  if scooter.change_lane(m, d) then
+    audio.play("sfx_click")
+  end
+end
+
+do_throttle = function(self, d)
+  if self.screen ~= "play" or self.paused or self.over then return end
+  local m = self.model
+  if not m then return end
+  scooter.throttle_step(m, d)
+  audio.play("sfx_click")
+  update_hud(self)
+end
+
+local function handle_events(self, events)
+  local m = self.model
+  for _, ev in ipairs(events) do
+    if ev.type == "pickup" then
+      audio.play("sfx_pickup")
+      popup(self, scooter.SCOOTER_X + 300, 470, "+100", C.gold)
+      burst(self, scooter.SCOOTER_X + 60, LANE_Y[m.lane], C.gold, 5)
+    elseif ev.type == "delivery" then
+      audio.play("sfx_delivery")
+      popup(self, scooter.SCOOTER_X + 300, 470, "DELIVERED +300", C.green)
+      burst(self, scooter.SCOOTER_X + 60, LANE_Y[m.lane], C.green, 8)
+    elseif ev.type == "stop_missed" then
+      popup(self, scooter.SCOOTER_X + 300, 470, "Too fast - stop missed!", C.orange)
+    elseif ev.type == "crash" then
+      audio.play("sfx_crash")
+      self.shake_t = 0.45
+      popup(self, scooter.SCOOTER_X + 300, 470, "CRASH! -50", C.danger)
+      burst(self, scooter.SCOOTER_X, LANE_Y[m.lane], C.danger, 10)
+    elseif ev.type == "stall" then
+      audio.play("sfx_stall")
+      popup(self, scooter.SCOOTER_X + 300, 470, "STALLED! Swap seats!", C.danger)
+    elseif ev.type == "stall_end" then
+      popup(self, scooter.SCOOTER_X + 300, 470, "Rolling again - swap to rest!", C.orange)
+    elseif ev.type == "win" then
+      end_level(self, true, ev.reason)
+    elseif ev.type == "lose" then
+      end_level(self, false, ev.reason)
+    end
+  end
+  if m.over and not self.over then
+    end_level(self, m.won, m.reason)
+  end
+  update_hud(self)
+end
+
+-- Autoplay bot (hidden verification aid): sets throttle, dodges by lane,
+-- swaps to rest the partner before fatigue 90, slows for delivery stops.
+do_autoplay = function(self)
+  local m = self.model
+  if not m or self.over or self.paused then return end
+  if m.stalled then
+    if m.seat == "front" then do_swap(self) end
+    return
+  end
+  if m.fatigue > 80 and m.seat == "front" then
+    do_swap(self)
+    return
+  end
+  local stop = scooter.stop_ahead(m)
+  if stop and stop.x < 1000 then
+    -- A stop is coming: get into its lane early (the bot only gets a
+    -- tick every 0.35s of game time, and at full speed a stop crosses
+    -- 700->300 in under a second - reacting at 700 was too late),
+    -- and slow down well before it so the delivery speed (<20) is met.
+    if stop.lane ~= m.lane then
+      do_lane_change(self, stop.lane > m.lane and 1 or -1)
+      scooter.set_order(m, 30)
+    elseif stop.x < 520 then
+      scooter.set_order(m, 12) -- crawl in slow for the delivery
+    else
+      scooter.set_order(m, 25)
+    end
+    return
+  end
+  local threat = scooter.threat_ahead(m, scooter.SCOOTER_X + 420)
+  if threat then
+    for _, d in ipairs({ -1, 1 }) do
+      local nl = m.lane + d
+      if nl >= 1 and nl <= 3 and scooter.lane_free(m, nl) then
+        do_lane_change(self, d)
+        break
+      end
+    end
+  end
+  -- Keep a healthy cruising throttle (partner holds it when you steer).
+  if m.seat == "back" or math.abs(m.order - 55) > 20 then
+    scooter.set_order(m, 55)
+  end
+end
+
+-- ------------------------------------------------------------------ input --
+
+function on_input(self, action_id, action)
+  if action_id == hash("touch") then
+    if action.pressed then
+      -- While a panel is up, only overlay picks count (panel-flag gate
+      -- only - never gate on screen ~= "play", or the title buttons die).
+      local only_overlay = self.overlay_up
+      for _, p in ipairs(self.pick) do
+        if (not only_overlay or p.overlay) and
+            gui.pick_node(p.node, action.x, action.y) then
+          p.cb()
+          return
+        end
+      end
+    end
+  elseif action_id == hash("pause_key") then
+    if action.pressed then
+      if self.user_paused then
+        msg.post(GAME, "ui_resume", {})
+      elseif self.screen == "play" then
+        msg.post(GAME, "ui_pause", {})
+      end
+    end
+  elseif action_id == hash("lane_up") then
+    if action.pressed then do_lane_change(self, -1) end
+  elseif action_id == hash("lane_down") then
+    if action.pressed then do_lane_change(self, 1) end
+  elseif action_id == hash("swap_key") then
+    if action.pressed then do_swap(self) end
+  elseif action_id == hash("throttle_up") then
+    if action.pressed then self.d_held = true
+    elseif action.released then self.d_held = false end
+  elseif action_id == hash("throttle_down") then
+    -- A is BOTH the throttle-down key and the autoplay toggle: a quick
+    -- tap (<0.35s) toggles the bot, holding it throttles down.
+    if action.pressed then
+      self.a_held = true
+      self.a_press_t = self.now or 0
+    elseif action.released then
+      self.a_held = false
+      if (self.now or 0) - (self.a_press_t or 0) < 0.35 then
+        self.autoplay = not self.autoplay
+        print("autoplay", self.autoplay)
+      end
+    end
+  elseif action_id == hash("unlock_key") then
+    if action.pressed and self.screen == "title" then
+      msg.post(GAME, "ui_unlock_all", {})
+    end
+  elseif action_id == hash("mute_key") then
+    if action.pressed then msg.post(GAME, "ui_mute", {}) end
+  end
+end
+
+-- ----------------------------------------------------------------- update --
+
+local function report_state(self)
+  if html5 then
+    local m = self.model
+    local mission_txt = ""
+    if self.def and self.def.mission and self.def.mission.text then
+      mission_txt = string.gsub(self.def.mission.text, "|", " ")
+    end
+    pcall(html5.run, "document.title='SECONDSEAT|screen=" .. self.screen ..
+      "|level=" .. (self.level or 0) ..
+      "|endless=" .. (self.endless and 1 or 0) ..
+      "|score=" .. (m and m.score or 0) ..
+      "|speed=" .. (m and math.floor(m.speed + 0.5) or 0) ..
+      "|fatigue=" .. (m and math.floor(m.fatigue + 0.5) or 0) ..
+      "|lane=" .. (m and m.lane or 0) ..
+      "|seat=" .. (m and m.seat or "") ..
+      "|deliveries=" .. (m and m.deliveries or 0) ..
+      "|stalled=" .. ((m and m.stalled) and 1 or 0) ..
+      "|paused=" .. (self.paused and 1 or 0) ..
+      "|muted=" .. (self.muted and 1 or 0) ..
+      "|mission=" .. mission_txt ..
+      "|time=" .. (m and math.floor(m.time_left or 0) or 0) ..
+      "|auto=" .. (self.autoplay and 1 or 0) ..
+      "|crashes=" .. (m and m.crashes or 0) ..
+      "|pickups=" .. (m and m.pickups or 0) ..
+      "|stalls=" .. (m and m.stalls or 0) ..
+      "|distance=" .. (m and math.floor(m.distance or 0) or 0) ..
+      "|order=" .. (m and math.floor(m.order + 0.5) or 0) .. "'")
+  end
+end
+
+function update(self, dt)
+  self.now = (self.now or 0) + dt
+  self.report_t = (self.report_t or 0) + dt
+  if self.report_t > 0.5 then
+    self.report_t = 0
+    report_state(self)
+  end
+  -- Mission banner: delete the node DIRECTLY on timer expiry, even when
+  -- paused (an ad can pause the game right after Play, and the old
+  -- clear_overlay path was gated on not-paused).
+  if self.banner_active and self.banner_timer then
+    self.banner_timer = self.banner_timer - dt
+    if self.banner_timer <= 0 then
+      self.banner_active = false
+      self.banner_timer = nil
+      if self.banner_node then
+        pcall(gui.delete_node, self.banner_node)
+        self.banner_node = nil
+      end
+    end
+  end
+  if self.paused then return end
+  -- particles
+  for i = #self.particles, 1, -1 do
+    local p = self.particles[i]
+    p.life = p.life - dt
+    if p.life <= 0 then
+      pcall(gui.delete_node, p.node)
+      table.remove(self.particles, i)
+    else
+      local pos = gui.get_position(p.node)
+      if p.confetti then
+        p.vy = p.vy - 60 * dt
+        pos.x = pos.x + p.vx * dt + math.sin(p.life * 9) * 30 * dt
+      elseif p.smoke then
+        pos.x = pos.x + p.vx * dt
+      else
+        p.vy = p.vy - 900 * dt
+        pos.x = pos.x + p.vx * dt
+      end
+      pos.y = pos.y + p.vy * dt
+      gui.set_position(p.node, pos)
+      local c = gui.get_color(p.node)
+      c.w = math.max(0, math.min(1, p.life / 0.5))
+      gui.set_color(p.node, c)
+    end
+  end
+  -- score popups
+  for i = #self.popups, 1, -1 do
+    local p = self.popups[i]
+    p.life = p.life - dt
+    if p.life <= 0 then
+      pcall(gui.delete_node, p.node)
+      table.remove(self.popups, i)
+    else
+      local pos = gui.get_position(p.node)
+      pos.y = pos.y + 42 * dt
+      gui.set_position(p.node, pos)
+      local c = gui.get_color(p.node)
+      c.w = math.max(0, p.life / 0.9)
+      gui.set_color(p.node, c)
+    end
+  end
+  if self.screen ~= "play" then return end
+  local m = self.model
+  if not m then return end
+  -- Held throttle keys feed the model.
+  local held = 0
+  if self.d_held then held = held + 1 end
+  if self.a_held then held = held - 1 end
+  m.throttle_held = held
+  -- Stall smoke puffs from the exhaust.
+  if m.stalled then
+    self.smoke_t = (self.smoke_t or 0) - dt
+    if self.smoke_t <= 0 then
+      self.smoke_t = 0.18
+      smoke_puff(self, scooter.SCOOTER_X - 150, LANE_Y[m.lane] - 30)
+    end
+  end
+  -- Drive the model; react to events.
+  if not self.over then
+    local events = scooter.update(m, dt)
+    handle_events(self, events)
+  end
+  sync_entities(self)
+  update_scooter_visual(self, dt)
+  update_hud(self)
+  -- Win/lose delay, then hand over to the controller.
+  if self.end_pending then
+    self.end_timer = self.end_timer - dt
+    if self.end_timer <= 0 then
+      local pending = self.end_pending
+      local reason = self.end_reason
+      self.end_pending = nil
+      self.end_reason = nil
+      if pending == "win" then
+        msg.post(GAME, "ui_level_won",
+          { score = m.score, stars = stars_for(self),
+            deliveries = m.deliveries })
+      else
+        msg.post(GAME, "ui_level_lost",
+          { score = m.score, reason = reason, deliveries = m.deliveries })
+      end
+    end
+  end
+  -- Autoplay bot (verification aid).
+  if self.autoplay and not self.over and self.screen == "play" then
+    self.ai_timer = (self.ai_timer or 0) - dt
+    if self.ai_timer <= 0 then
+      self.ai_timer = 0.35
+      do_autoplay(self)
+    end
+  end
+end
+
+-- --------------------------------------------------------------- messages --
+
+function on_message(self, message_id, message, sender)
+  if message_id == hash("show_title") then
+    self.muted = message.muted or false
+    self.endless_best = message.endless_best or 0
+    show_title(self, message)
+  elseif message_id == hash("show_levels") then
+    self.muted = message.muted or false
+    show_levels(self, message)
+  elseif message_id == hash("show_play") then
+    self.muted = message.muted or false
+    show_play(self, message)
+  elseif message_id == hash("show_win") then
+    show_win(self, message)
+  elseif message_id == hash("show_lose") then
+    show_lose(self, message)
+  elseif message_id == hash("show_howto") then
+    show_howto(self)
+  elseif message_id == hash("show_pause") then
+    self.user_paused = true
+    self.banner_active = false
+    show_pause(self)
+  elseif message_id == hash("hide_pause") then
+    self.user_paused = false
+    self.paused = false
+    clear_overlay(self)
+  elseif message_id == hash("ad_pause") then
+    self.paused = true
+  elseif message_id == hash("ad_resume") then
+    self.paused = self.user_paused or false
+  elseif message_id == hash("set_mute") then
+    self.muted = message.muted
+    if self.mute_label then
+      gui.set_text(self.mute_label,
+        self.muted and "SOUND OFF" or "SOUND ON")
+    end
+  end
+end
+
+-- -------------------------------------------------------------------- init --
+
+function init(self)
+  msg.post(".", "acquire_input_focus")
+  self.nodes = {}
+  self.onodes = {}
+  self.pick = {}
+  self.ent_nodes = {}
+  self.particles = {}
+  self.popups = {}
+  self.screen = "title"
+  self.phase = "title"
+  self.muted = false
+  self.autoplay = false
+  self.paused = false
+  self.user_paused = false
+  self.over = false
+  self.report_t = 0
+  self.ai_timer = 0.5
+  self.now = 0
+  self.a_held = false
+  self.d_held = false
+  self.a_press_t = 0
+  self.shake_t = 0
+  self.smoke_t = 0
+  self.banner_active = false
+  self.banner_timer = nil
+  self.banner_node = nil
+  self.scooter_node = nil
+  self.scooter_img = "scooter_front"
+  self.overlay_up = false
+end

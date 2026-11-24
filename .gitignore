@@ -1,0 +1,6 @@
+# Defold build outputs and caches
+dist/
+build/
+.internal/
+__pycache__/
+*.pyc

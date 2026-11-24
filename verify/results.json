@@ -1,0 +1,192 @@
+[
+  {
+    "name": "page loads, title state reported",
+    "ok": true,
+    "detail": "{\"screen\":\"title\",\"level\":\"0\",\"endless\":\"0\",\"score\":\"0\",\"speed\":\"0\",\"fatigue\":\"0\",\"lane\":\"0\",\"seat\":\"\",\"deliveries\":\"0\",\"stalled\":\"0\",\"paused\":\"0\",\"muted\":\"0\",\"mission\":\"\",\"time\":\"0\",\"auto\":\"0\",\"crashes\":\"0\",\"pickups\":\"0\",\"stalls\":\"0\",\"distance\":\"0\",\"order\":\"0\"}"
+  },
+  {
+    "name": "canvas non-blank (title screenshot, distinct colors)",
+    "ok": true,
+    "detail": "distinct=416"
+  },
+  {
+    "name": "GD SDK present (window.gdsdk object)",
+    "ok": true,
+    "detail": "{\"gdsdk\":\"object\",\"gdOptions\":\"object\",\"gameId\":\"PLACEHOLDER\",\"gdDefold\":\"object\",\"gdDefoldOnEvent\":\"function\"}"
+  },
+  {
+    "name": "GD_OPTIONS gameId is PLACEHOLDER",
+    "ok": true,
+    "detail": "gameId=PLACEHOLDER"
+  },
+  {
+    "name": "GD_DEFOLD.onEvent present",
+    "ok": true,
+    "detail": "{\"gdsdk\":\"object\",\"gdOptions\":\"object\",\"gameId\":\"PLACEHOLDER\",\"gdDefold\":\"object\",\"gdDefoldOnEvent\":\"function\"}"
+  },
+  {
+    "name": "SDK_READY in console logs",
+    "ok": true,
+    "detail": "logs=log: noMinijuegosSDK false | log: %c %c %c GameDistribution.com HTML5 SDK | Version: 1.43.63 %c %c %c background: #9854d8 background: #6c2ca7 color: #fff; background: #450f78; background: #6c2ca7 background: #9854d8 background: #ffffff | log: %c [developer-event] background: white; color:green; border-radius:3px;padding:6px;font-weight:bold {name: SDK_READY, data: Object, source: core}"
+  },
+  {
+    "name": "PLAY starts level 1",
+    "ok": true,
+    "detail": "{\"screen\":\"play\",\"level\":\"1\",\"endless\":\"0\",\"score\":\"0\",\"speed\":\"5\",\"fatigue\":\"1\",\"lane\":\"2\",\"seat\":\"front\",\"deliveries\":\"0\",\"stalled\":\"0\",\"paused\":\"0\",\"muted\":\"0\",\"mission\":\"Deliver 2 parcels\",\"time\":\"149\",\"auto\":\"0\",\"crashes\":\"0\",\"pickups\":\"0\",\"stalls\":\"0\",\"distance\":\"0\",\"order\":\"40\"}"
+  },
+  {
+    "name": "level 1 mission is deliveries",
+    "ok": true,
+    "detail": "mission=Deliver 2 parcels"
+  },
+  {
+    "name": "throttle (D) raises speed",
+    "ok": true,
+    "detail": "speed=31 order=67"
+  },
+  {
+    "name": "lane change up works (W)",
+    "ok": true,
+    "detail": "lane=1"
+  },
+  {
+    "name": "lane change down works (S)",
+    "ok": true,
+    "detail": "lane=2"
+  },
+  {
+    "name": "fatigue rises with partner on throttle",
+    "ok": true,
+    "detail": "fatigue 10 -> 24"
+  },
+  {
+    "name": "swap changes seat to back",
+    "ok": true,
+    "detail": "seat=back"
+  },
+  {
+    "name": "partner rests in back seat (fatigue falls)",
+    "ok": true,
+    "detail": "fatigue 23 -> 0"
+  },
+  {
+    "name": "swap back to front seat",
+    "ok": true,
+    "detail": "seat=front"
+  },
+  {
+    "name": "throttle down slows the scooter (A hold)",
+    "ok": true,
+    "detail": "speed=27 order=6"
+  },
+  {
+    "name": "stall triggers at fatigue 100",
+    "ok": true,
+    "detail": "fatigue=100 stalled=1 speed=0"
+  },
+  {
+    "name": "swap clears the stall",
+    "ok": true,
+    "detail": "stalled=0"
+  },
+  {
+    "name": "MENU returns to title",
+    "ok": true,
+    "detail": "{\"screen\":\"title\",\"level\":\"1\",\"endless\":\"0\",\"score\":\"0\",\"speed\":\"2\",\"fatigue\":\"67\",\"lane\":\"1\",\"seat\":\"back\",\"deliveries\":\"0\",\"stalled\":\"0\",\"paused\":\"0\",\"muted\":\"0\",\"mission\":\"Deliver 2 parcels\",\"time\":\"109\",\"auto\":\"0\",\"crashes\":\"0\",\"pickups\":\"0\",\"stalls\":\"1\",\"distance\":\"184\",\"order\":\"3\"}"
+  },
+  {
+    "name": "PLAY starts level 1 again",
+    "ok": true,
+    "detail": "{\"screen\":\"play\",\"level\":\"1\",\"endless\":\"0\",\"score\":\"0\",\"speed\":\"12\",\"fatigue\":\"2\",\"lane\":\"2\",\"seat\":\"front\",\"deliveries\":\"0\",\"stalled\":\"0\",\"paused\":\"0\",\"muted\":\"0\",\"mission\":\"Deliver 2 parcels\",\"time\":\"149\",\"auto\":\"0\",\"crashes\":\"0\",\"pickups\":\"0\",\"stalls\":\"0\",\"distance\":\"0\",\"order\":\"40\"}"
+  },
+  {
+    "name": "autoplay turns on",
+    "ok": true,
+    "detail": "{\"screen\":\"play\",\"level\":\"1\",\"endless\":\"0\",\"score\":\"0\",\"speed\":\"21\",\"fatigue\":\"3\",\"lane\":\"2\",\"seat\":\"front\",\"deliveries\":\"0\",\"stalled\":\"0\",\"paused\":\"0\",\"muted\":\"0\",\"mission\":\"Deliver 2 parcels\",\"time\":\"149\",\"auto\":\"1\",\"crashes\":\"0\",\"pickups\":\"0\",\"stalls\":\"0\",\"distance\":\"3\",\"order\":\"35\"}"
+  },
+  {
+    "name": "pickup scores (pickups >= 1)",
+    "ok": true,
+    "detail": "pickups=1 score=400"
+  },
+  {
+    "name": "delivery stop completes a delivery",
+    "ok": true,
+    "detail": "deliveries=1 score=400"
+  },
+  {
+    "name": "pause key pauses",
+    "ok": true,
+    "detail": "{\"screen\":\"play\",\"level\":\"1\",\"endless\":\"0\",\"score\":\"400\",\"speed\":\"21\",\"fatigue\":\"38\",\"lane\":\"3\",\"seat\":\"front\",\"deliveries\":\"1\",\"stalled\":\"0\",\"paused\":\"1\",\"muted\":\"0\",\"mission\":\"Deliver 2 parcels\",\"time\":\"139\",\"auto\":\"1\",\"crashes\":\"1\",\"pickups\":\"1\",\"stalls\":\"0\",\"distance\":\"52\",\"order\":\"55\"}"
+  },
+  {
+    "name": "pause key resumes",
+    "ok": true,
+    "detail": "{\"screen\":\"play\",\"level\":\"1\",\"endless\":\"0\",\"score\":\"400\",\"speed\":\"30\",\"fatigue\":\"40\",\"lane\":\"3\",\"seat\":\"front\",\"deliveries\":\"1\",\"stalled\":\"0\",\"paused\":\"0\",\"muted\":\"0\",\"mission\":\"Deliver 2 parcels\",\"time\":\"138\",\"auto\":\"1\",\"crashes\":\"1\",\"pickups\":\"1\",\"stalls\":\"0\",\"distance\":\"55\",\"order\":\"55\"}"
+  },
+  {
+    "name": "level 1 won by autoplay",
+    "ok": true,
+    "detail": "score=900 deliveries=2 crashes=1"
+  },
+  {
+    "name": "score increased during play",
+    "ok": true,
+    "detail": "score=900"
+  },
+  {
+    "name": "NEXT LEVEL starts level 2",
+    "ok": true,
+    "detail": "level=2"
+  },
+  {
+    "name": "MENU returns to title (from level 2)",
+    "ok": true,
+    "detail": "{\"screen\":\"title\",\"level\":\"2\",\"endless\":\"0\",\"score\":\"0\",\"speed\":\"13\",\"fatigue\":\"2\",\"lane\":\"2\",\"seat\":\"front\",\"deliveries\":\"0\",\"stalled\":\"0\",\"paused\":\"0\",\"muted\":\"0\",\"mission\":\"Deliver 3 parcels\",\"time\":\"159\",\"auto\":\"1\",\"crashes\":\"0\",\"pickups\":\"0\",\"stalls\":\"0\",\"distance\":\"0\",\"order\":\"40\"}"
+  },
+  {
+    "name": "U unlock: level 5 loads and plays",
+    "ok": true,
+    "detail": "level=5 mission=Deliver 3 parcels, no stalls"
+  },
+  {
+    "name": "U unlock: level 12 loads and plays",
+    "ok": true,
+    "detail": "level=12 mission=Deliver 7 parcels"
+  },
+  {
+    "name": "endless mode starts",
+    "ok": true,
+    "detail": "{\"screen\":\"play\",\"level\":\"1\",\"endless\":\"1\",\"score\":\"0\",\"speed\":\"9\",\"fatigue\":\"1\",\"lane\":\"2\",\"seat\":\"front\",\"deliveries\":\"0\",\"stalled\":\"0\",\"paused\":\"0\",\"muted\":\"0\",\"mission\":\"Deliver as many as you can\",\"time\":\"0\",\"auto\":\"1\",\"crashes\":\"0\",\"pickups\":\"0\",\"stalls\":\"0\",\"distance\":\"0\",\"order\":\"40\"}"
+  },
+  {
+    "name": "pause in endless works",
+    "ok": true,
+    "detail": "{\"screen\":\"play\",\"level\":\"1\",\"endless\":\"1\",\"score\":\"0\",\"speed\":\"10\",\"fatigue\":\"1\",\"lane\":\"2\",\"seat\":\"front\",\"deliveries\":\"0\",\"stalled\":\"0\",\"paused\":\"1\",\"muted\":\"0\",\"mission\":\"Deliver as many as you can\",\"time\":\"0\",\"auto\":\"1\",\"crashes\":\"0\",\"pickups\":\"0\",\"stalls\":\"0\",\"distance\":\"0\",\"order\":\"40\"}"
+  },
+  {
+    "name": "resume in endless works",
+    "ok": true,
+    "detail": "{\"screen\":\"play\",\"level\":\"1\",\"endless\":\"1\",\"score\":\"0\",\"speed\":\"23\",\"fatigue\":\"3\",\"lane\":\"2\",\"seat\":\"front\",\"deliveries\":\"0\",\"stalled\":\"0\",\"paused\":\"0\",\"muted\":\"0\",\"mission\":\"Deliver as many as you can\",\"time\":\"0\",\"auto\":\"1\",\"crashes\":\"0\",\"pickups\":\"0\",\"stalls\":\"0\",\"distance\":\"2\",\"order\":\"40\"}"
+  },
+  {
+    "name": "endless scores",
+    "ok": true,
+    "detail": "score=300 deliveries=1"
+  },
+  {
+    "name": "endless crash registers",
+    "ok": true,
+    "detail": "crashes=1 screen=play"
+  },
+  {
+    "name": "mute toggle flips muted state",
+    "ok": true,
+    "detail": "muted 0 -> 1"
+  },
+  {
+    "name": "no page/console errors (excluding GD SDK network noise)",
+    "ok": true,
+    "detail": ""
+  }
+]

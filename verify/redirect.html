@@ -1,0 +1,10 @@
+<!doctype html>
+<html><body><div>redirecting to the game...</div>
+<script>
+  // This Chrome build blocks CDP-initiated navigation to loopback
+  // (ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS) no matter the flags.
+  // A navigation initiated by a local (file://) page to the same
+  // loopback URL is allowed, so the verifier loads this file first.
+  location.href = 'http://localhost:8908/index.html';
+</script>
+</body></html>

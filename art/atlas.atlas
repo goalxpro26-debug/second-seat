@@ -1,0 +1,36 @@
+images {
+  image: "/art/background.png"
+}
+images {
+  image: "/art/scooter_front.png"
+}
+images {
+  image: "/art/scooter_back.png"
+}
+images {
+  image: "/art/car_red.png"
+}
+images {
+  image: "/art/car_blue.png"
+}
+images {
+  image: "/art/truck.png"
+}
+images {
+  image: "/art/pothole.png"
+}
+images {
+  image: "/art/parcel.png"
+}
+images {
+  image: "/art/stop.png"
+}
+images {
+  image: "/art/star.png"
+}
+images {
+  image: "/art/lock.png"
+}
+images {
+  image: "/art/particle.png"
+}
